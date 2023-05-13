@@ -166,7 +166,8 @@ describe('Contract Tests: ', function() {
 		// check Bob gets paid
 		const bobHbarBal = await getAccountBalance(bobId);
 		client.setOperator(aliceId, alicePK);
-		await contractExecuteFcn(contractId, 200_000, 'release', []);
+		const [contractResult] = await contractExecuteFcn(contractId, 200_000, 'release', []);
+		expect(contractResult.status.toString() == 'SUCESS').to.be.true;
 		expect(bobHbarBal.toBigNumber().plus(10).toNumber()).to.be.equal((await getAccountBalance(bobId)).toBigNumber().toNumber());
 	});
 
