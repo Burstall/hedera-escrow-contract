@@ -245,7 +245,7 @@ async function contractDeployFcn(bytecode, gasLim) {
 async function getSettings(fcnName, ...expectedVars) {
 
 	const encodedCommand = iface.encodeFunctionData(fcnName, []);
-	console.log('Encoded command:', encodedCommand);
+	// console.log('Encoded command:', encodedCommand);
 
 	// query the contract
 	const contractCall = await new ContractCallQuery()
@@ -273,9 +273,9 @@ async function getSettings(fcnName, ...expectedVars) {
  * @returns {[TransactionReceipt, any, TransactionRecord]} the transaction receipt and any decoded results
  */
 async function contractExecuteFcn(cId, gasLim, fcnName, params, amountHbar = 0) {
-	console.log('Calling', fcnName, 'with params', params);
+	// console.log('Calling', fcnName, 'with params', params);
 	const encodedCommand = iface.encodeFunctionData(fcnName, params);
-	console.log('Encoded command:', encodedCommand);
+	// console.log('Encoded command:', encodedCommand);
 	// convert to UINT8ARRAY after stripping the '0x'
 	const contractExecuteTx = await new ContractExecuteTransaction()
 		.setContractId(cId)
