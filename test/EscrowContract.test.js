@@ -18,6 +18,7 @@ const {
 	ContractId,
 	AccountInfoQuery,
 	ContractCallQuery,
+	TransactionRecordQuery,
 } = require('@hashgraph/sdk');
 const { default: axios } = require('axios');
 require('dotenv').config();
@@ -111,6 +112,7 @@ describe('Deployment: ', function() {
 describe('Contract Tests: ', function() {
 	it('Check the deployment worked and parties to escrow match', async function() {
 		const [walletA, walletB, walletC] = await getSettings('getParties', 'commisioner', 'worker', 'referee');
+		// console.log('Wallet A:', walletA.toString(), '\nWallet B:', walletB.toString(), '\nWallet C:', walletC.toString());
 		expect(AccountId.fromSolidityAddress(walletA).toString()).to.equal(aliceId.toString());
 		expect(AccountId.fromSolidityAddress(walletB).toString()).to.equal(bobId.toString());
 		expect(AccountId.fromSolidityAddress(walletC).toString()).to.equal(operatorId.toString());
@@ -122,7 +124,7 @@ describe('Contract Tests: ', function() {
 		const aliceHbarBal = await getAccountBalance(aliceId);
 
 		const [contractExecuteRx] = await contractExecuteFcn(contractId, 200_000, 'fundEscrow', [], new Hbar(10, HbarUnit.Hbar));
-		expect(contractExecuteRx.status.toString() == 'SUCESS').to.be.true;
+		expect(contractExecuteRx.status.toString() == 'SUCCESS').to.be.true;
 
 		expect(aliceHbarBal.toBigNumber().minus(10).toNumber()).to.be.greaterThan((await getAccountBalance(aliceId)).toBigNumber().toNumber());
 		await checkLastMirrorEvent();
@@ -135,8 +137,8 @@ describe('Contract Tests: ', function() {
 			await contractExecuteFcn(contractId, 200_000, 'fundEscrow', [], new Hbar(10, HbarUnit.Hbar));
 		}
 		catch (err) {
-			// iface.parseError(errorName)
-			console.log('Error:', err);
+			const solidityError = await parseError(err.transactionId);
+			console.log('Error:', solidityError.name, solidityError.args);
 			errorCount++;
 		}
 		expect(errorCount).to.equal(1);
@@ -145,7 +147,7 @@ describe('Contract Tests: ', function() {
 	it('Bob checks if the contract is funded', async function() {
 		client.setOperator(bobId, bobPk);
 		const fundedBalance = await getSettings('isFunded', 'balance');
-		expect(new Hbar(fundedBalance, HbarUnit.Tinybar).toTinybars() == new Hbar(10, HbarUnit.Hbar).toTinybars()).to.be.true;
+		expect(new Hbar(fundedBalance, HbarUnit.Tinybar).toTinybars().toNumber() == new Hbar(10, HbarUnit.Hbar).toTinybars().toNumber()).to.be.true;
 	});
 
 	it('Bob cannot trigger fund release', async function() {
@@ -155,8 +157,8 @@ describe('Contract Tests: ', function() {
 			await contractExecuteFcn(contractId, 200_000, 'release', []);
 		}
 		catch (err) {
-			// iface.parseError(errorName)
-			console.log('Error:', err);
+			const solidityError = await parseError(err.transactionId);
+			console.log('Error:', solidityError.name, solidityError.args);
 			errorCount++;
 		}
 		expect(errorCount).to.equal(1);
@@ -164,10 +166,12 @@ describe('Contract Tests: ', function() {
 
 	it('Alice should be able to trigger fund release', async function() {
 		// check Bob gets paid
-		const bobHbarBal = await getAccountBalance(bobId);
 		client.setOperator(aliceId, alicePK);
+		const bobHbarBal = await getAccountBalance(bobId);
 		const [contractResult] = await contractExecuteFcn(contractId, 200_000, 'release', []);
-		expect(contractResult.status.toString() == 'SUCESS').to.be.true;
+		expect(contractResult.status.toString() == 'SUCCESS').to.be.true;
+		await sleep(3000);
+		await checkLastMirrorEvent();
 		expect(bobHbarBal.toBigNumber().plus(10).toNumber()).to.be.equal((await getAccountBalance(bobId)).toBigNumber().toNumber());
 	});
 
@@ -178,12 +182,15 @@ describe('Contract Tests: ', function() {
 		client.setOperator(aliceId, alicePK);
 		const aliceHbarBal = await getAccountBalance(aliceId);
 		const [contractExecuteRx] = await contractExecuteFcn(contractId, 200_000, 'fundEscrow', [], new Hbar(10, HbarUnit.Hbar));
-		expect(contractExecuteRx.status.toString() == 'SUCESS').to.be.true;
+		expect(contractExecuteRx.status.toString() == 'SUCCESS').to.be.true;
 
 		expect(aliceHbarBal.toBigNumber().minus(10).toNumber()).to.be.greaterThan((await getAccountBalance(aliceId)).toBigNumber().toNumber());
 
 		client.setOperator(operatorId, operatorKey);
-		await contractExecuteFcn(contractId, 200_000, 'release', []);
+		const [contractResult] = await contractExecuteFcn(contractId, 200_000, 'release', []);
+		expect(contractResult.status.toString() == 'SUCCESS').to.be.true;
+		await sleep(3000);
+		await checkLastMirrorEvent();
 		// not checking for exact numbers due to tx costs
 		expect(aliceHbarBal.toBigNumber().minus(3).toNumber()).to.be.lessThan((await getAccountBalance(aliceId)).toBigNumber().toNumber());
 	});
@@ -236,6 +243,17 @@ async function contractDeployFcn(bytecode, gasLim) {
 	return contractCreateRx.contractId;
 }
 
+async function parseError(txId) {
+	client.setOperator(operatorId, operatorKey);
+	const record = await new TransactionRecordQuery()
+		.setTransactionId(txId)
+		.setValidateReceiptStatus(false)
+		.execute(client);
+
+	// console.log('Error Record:', record);
+	return iface.parseError(record.contractFunctionResult.errorMessage);
+}
+
 /**
  * Helper function to get the current settings of the contract
  * @param {string} fcnName the name of the getter to call
@@ -246,22 +264,35 @@ async function contractDeployFcn(bytecode, gasLim) {
 async function getSettings(fcnName, ...expectedVars) {
 
 	const encodedCommand = iface.encodeFunctionData(fcnName, []);
-	// console.log('Encoded command:', encodedCommand);
+	// console.log('Encoded command:', encodedCommand, fcnName);
 
 	// query the contract
-	const contractCall = await new ContractCallQuery()
-		.setContractId(contractId)
-		.setFunctionParameters(Buffer.from(encodedCommand.slice(2), 'hex'))
-		.setQueryPayment(new Hbar(0.01))
-		.setGas(100_000)
-		.execute(client);
-	const queryResult = iface.decodeFunctionResult(fcnName, contractCall.bytes);
+	let contractCall;
+	try {
+		contractCall = await new ContractCallQuery()
+			.setContractId(contractId)
+			.setFunctionParameters(Buffer.from(encodedCommand.slice(2), 'hex'))
+			.setMaxQueryPayment(new Hbar(2))
+			.setGas(100_000)
+			.execute(client);
+		const queryResult = iface.decodeFunctionResult(fcnName, contractCall.bytes);
 
-	const results = [];
-	for (let v = 0 ; v < expectedVars.length; v++) {
-		results.push(queryResult[expectedVars[v]]);
+		// console.log('Query result:', queryResult);
+
+		const results = [];
+		for (let v = 0 ; v < expectedVars.length; v++) {
+			results.push(queryResult[expectedVars[v]]);
+		}
+		return results;
 	}
-	return results;
+	catch (err) {
+		// console.log('Error in getSettings:', err.transactionId.toString());
+		const record = contractCall != null ? await contractCall.getRecord(client) : null;
+		console.log('Error in getSettings:', record);
+		const error = iface.decodeFunctionResult(fcnName, record.bytes);
+		console.log('Error in getSettings:', error);
+	}
+
 }
 
 /**
@@ -276,7 +307,7 @@ async function getSettings(fcnName, ...expectedVars) {
 async function contractExecuteFcn(cId, gasLim, fcnName, params, amountHbar = 0) {
 	// console.log('Calling', fcnName, 'with params', params);
 	const encodedCommand = iface.encodeFunctionData(fcnName, params);
-	// console.log('Encoded command:', encodedCommand);
+	// console.log('Encoded command:', encodedCommand, fcnName);
 	// convert to UINT8ARRAY after stripping the '0x'
 	const contractExecuteTx = await new ContractExecuteTransaction()
 		.setContractId(cId)

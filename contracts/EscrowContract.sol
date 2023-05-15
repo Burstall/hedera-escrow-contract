@@ -49,7 +49,7 @@ contract EscrowContract {
 
 	function release() external {
 		// only the commisioner or the referee can release the funds
-		if (msg.sender != _commisioner || msg.sender != _referee) revert Unauthorized();
+		if (!(msg.sender == _commisioner || msg.sender == _referee)) revert Unauthorized();
 		uint256 balance = address(this).balance;
 		if (balance == 0) revert NoFunds();
 
